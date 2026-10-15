@@ -11,6 +11,7 @@ import {
   DEFAULT_SETTINGS, generateMatcap, MatcapSettings, PRESETS, Preset,
   fileName, settingsForPreset,
 } from "@/lib/matcap";
+import { decodeExr, exrToSrgbPixels, type ExrImage } from "@/lib/exr";
 import type { PreviewShape } from "./Preview";
 
 const Preview = dynamic(() => import("./Preview"), { ssr: false });
@@ -69,6 +70,15 @@ function readImage(file: File): Promise<{ pixels: ImageData; url: string }> {
   });
 }
 
+function readFileDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read source file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function Studio() {
   const [settings, setSettings] = useState<MatcapSettings>(DEFAULT_SETTINGS);
   const [activePreset, setActivePreset] = useState("silver");
@@ -76,6 +86,8 @@ export default function Studio() {
   const [source, setSource] = useState<ImageData | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceName, setSourceName] = useState("");
+  const [exrData, setExrData] = useState<ExrImage | null>(null);
+  const [exrFile, setExrFile] = useState<File | null>(null);
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const [shape, setShape] = useState<PreviewShape>("Suzanne");
   const [previewSize, setPreviewSize] = useState(160);
@@ -119,6 +131,15 @@ export default function Studio() {
 
   useEffect(() => { setCanvas(generateMatcap(settings, source)); }, [settings, source]);
   useEffect(() => {
+    if (!exrData) return;
+    const pixels = new ImageData(exrToSrgbPixels(exrData, settings.exrExposure), 512, 512);
+    const preview = document.createElement("canvas");
+    preview.width = preview.height = 512;
+    preview.getContext("2d")?.putImageData(pixels, 0, 0);
+    setSource(pixels);
+    setSourceUrl(preview.toDataURL("image/png"));
+  }, [exrData, settings.exrExposure]);
+  useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(""), 3500);
     return () => window.clearTimeout(timer);
@@ -144,17 +165,28 @@ export default function Studio() {
   };
   const upload = async (file?: File) => {
     if (!file) return;
-    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) { setNotice("Choose a PNG, JPEG, or WebP image"); return; }
-    if (file.size > 20 * 1024 * 1024) { setNotice("Choose an image smaller than 20 MB"); return; }
+    const isExr = /\.exr$/i.test(file.name) || ["image/x-exr", "image/aces"].includes(file.type);
+    if (!isExr && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) { setNotice("Choose an EXR, PNG, JPEG, or WebP image"); return; }
+    if (file.size > (isExr ? 50 : 20) * 1024 * 1024) { setNotice(`Choose a source smaller than ${isExr ? 50 : 20} MB`); return; }
     try {
-      const result = await readImage(file);
-      setSource(result.pixels);
-      setSourceUrl(result.url);
+      if (isExr) {
+        const decoded = decodeExr(await file.arrayBuffer());
+        setExrData(decoded);
+        setExrFile(file);
+        setSource(null);
+        setSourceUrl("");
+      } else {
+        const result = await readImage(file);
+        setExrData(null);
+        setExrFile(null);
+        setSource(result.pixels);
+        setSourceUrl(result.url);
+      }
       setSourceName(file.name);
       setPanel("image");
-      setSettings((current) => ({ ...current, mode: "image", name: file.name.replace(/\.[^.]+$/, "") || "Imported Matcap" }));
+      setSettings((current) => ({ ...current, mode: "image", imageMapping: isExr ? "matcap" : current.imageMapping, name: file.name.replace(/\.[^.]+$/, "") || "Imported Matcap" }));
       setActivePreset("custom");
-      setNotice("Image ready for matcap processing");
+      setNotice(isExr ? "EXR ready · adjust exposure in Image settings" : "Image ready for matcap processing");
     } catch { setNotice("The image could not be opened"); }
   };
   const onDrop = (e: DragEvent<HTMLElement>) => {
@@ -170,23 +202,41 @@ export default function Studio() {
       setNotice(`Exported ${size} px PNG · ${Math.round(blob.size / 1024)} KB`);
     }, "image/png");
   };
-  const exportProject = () => {
-    const blob = new Blob([JSON.stringify({ version: 1, settings, sourceUrl, sourceName }, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = fileName(settings.name).replace(/\.png$/, ".matcap.json"); a.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setNotice("Project saved to your computer");
+  const exportProject = async () => {
+    try {
+      const sourceExrDataUrl = exrFile ? await readFileDataUrl(exrFile) : undefined;
+      const blob = new Blob([JSON.stringify({ version: 1, settings, sourceUrl, sourceName, sourceExrDataUrl }, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = fileName(settings.name).replace(/\.png$/, ".matcap.json"); a.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice("Project saved to your computer");
+    } catch { setNotice("Could not save project"); }
   };
   const importProject = async (file?: File) => {
     if (!file) return;
     try {
       const data = JSON.parse(await file.text());
       if (data.version !== 1 || !data.settings) throw new Error("Invalid project");
+      let restoredExr: ExrImage | null = null;
+      let restoredExrFile: File | null = null;
+      if (data.sourceExrDataUrl) {
+        if (typeof data.sourceExrDataUrl !== "string" || !/^data:[^,]*;base64,/i.test(data.sourceExrDataUrl) || data.sourceExrDataUrl.length > 75_000_000) throw new Error("Invalid EXR source");
+        const buffer = await (await fetch(data.sourceExrDataUrl)).arrayBuffer();
+        if (buffer.byteLength > 50 * 1024 * 1024) throw new Error("EXR source is too large");
+        restoredExr = decodeExr(buffer);
+        restoredExrFile = new File([buffer], data.sourceName || "source.exr", { type: "image/x-exr" });
+      }
       setSettings({ ...DEFAULT_SETTINGS, ...data.settings });
       setActivePreset("custom");
       const nextPanel = data.settings.mode === "zebra" ? "zebra" : data.settings.mode === "image" ? "image" : "surface";
       setPanel(nextPanel);
-      if (data.sourceUrl) {
+      setExrData(restoredExr);
+      setExrFile(restoredExrFile);
+      if (restoredExr) {
+        setSource(null);
+        setSourceUrl("");
+        setSourceName(data.sourceName || "source.exr");
+      } else if (data.sourceUrl) {
         const img = new Image();
         img.onload = () => {
           const c = document.createElement("canvas"); c.width = c.height = 512;
@@ -200,11 +250,11 @@ export default function Studio() {
       setNotice("Project opened");
     } catch { setNotice("This project file is not valid"); }
   };
-  const reset = () => { setSettings(DEFAULT_SETTINGS); setActivePreset("silver"); setPanel("surface"); setSource(null); setSourceUrl(""); setSourceName(""); setNotice("Studio reset"); };
+  const reset = () => { setSettings(DEFAULT_SETTINGS); setActivePreset("silver"); setPanel("surface"); setSource(null); setSourceUrl(""); setSourceName(""); setExrData(null); setExrFile(null); setNotice("Studio reset"); };
 
   return (
     <main className="studio-shell" onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }} onDrop={onDrop}>
-      <input ref={uploadRef} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(e: ChangeEvent<HTMLInputElement>) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
+      <input ref={uploadRef} className="sr-only" type="file" accept=".exr,image/x-exr,image/png,image/jpeg,image/webp" onChange={(e: ChangeEvent<HTMLInputElement>) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
       <input ref={projectRef} className="sr-only" type="file" accept=".json,application/json" onChange={(e) => { void importProject(e.target.files?.[0]); e.target.value = ""; }} />
       <header className="topbar">
         <div className="brand"><span className="brand-mark"><span /></span><span className="brand-name">MATCAP<span>STUDIO</span></span><span className="brand-beta">BETA</span></div>
@@ -225,7 +275,7 @@ export default function Studio() {
           <div className="preset-grid">{PRESETS.map((preset) => <PresetCard key={preset.id} preset={preset} selected={activePreset === preset.id} onClick={() => choosePreset(preset)} />)}</div>
           <div className="library-bottom">
             <div className="divider-heading">IMPORT SOURCE</div>
-            {imageReady ? <div className="imported-file"><img src={sourceUrl} alt="Imported source" /><div><strong>{sourceName}</strong><span>LOCAL IMAGE · READY</span></div><button title="Remove source" onClick={() => { setSource(null); setSourceUrl(""); setSourceName(""); if (settings.mode === "image") setSettings((s) => ({ ...s, mode: "studio" })); setNotice("Source removed"); }}><X size={14} /></button></div> : <button className="upload-tile" onClick={() => uploadRef.current?.click()}><span className="upload-icon"><UploadCloud size={19} /></span><span><strong>Drop an image here</strong><small>or click to browse · PNG, JPG, WebP</small></span></button>}
+            {imageReady ? <div className="imported-file"><img src={sourceUrl} alt="Imported source" /><div><strong>{sourceName}</strong><span>LOCAL IMAGE · READY</span></div><button title="Remove source" onClick={() => { setSource(null); setSourceUrl(""); setSourceName(""); setExrData(null); setExrFile(null); if (settings.mode === "image") setSettings((s) => ({ ...s, mode: "studio" })); setNotice("Source removed"); }}><X size={14} /></button></div> : <button className="upload-tile" onClick={() => uploadRef.current?.click()}><span className="upload-icon"><UploadCloud size={19} /></span><span><strong>Drop an image here</strong><small>or click to browse · EXR, PNG, JPG, WebP</small></span></button>}
             <p className="local-note"><span className="local-led" />Everything stays on this device</p>
           </div>
         </aside>
@@ -258,13 +308,13 @@ export default function Studio() {
               <div className="control-section"><div className="section-title"><span><Focus size={15} /> RIM LIGHT</span><span>04</span></div><ColorControl label="Rim color" value={settings.rimColor} onChange={(v) => update("rimColor", v)} /><div className="range-stack color-followup"><RangeControl label="Sharpness" value={settings.rimSharpness} min={0.5} max={6} onChange={(v) => update("rimSharpness", v)} /><RangeControl label="Strength" value={settings.rimStrength} min={0} max={1.5} onChange={(v) => update("rimStrength", v)} /></div></div>
             </>}
             {panel === "zebra" && <><div className="analysis-note"><span className="analysis-icon">≋</span><div><strong>Curvature analysis</strong><p>Stripes follow the reflection vector. Kinks reveal tangent breaks; smooth bends show curvature changes.</p></div></div><div className="control-section"><div className="section-title"><span><Layers2 size={15} /> STRIPE PATTERN</span><span>01</span></div><div className="range-stack"><RangeControl label="Band count" value={settings.bands} min={6} max={12} step={1} onChange={(v) => update("bands", v)} /><RangeControl label="Edge softness" value={settings.stripeSoftness} min={0.02} max={0.3} suffix="%" onChange={(v) => update("stripeSoftness", v)} /><RangeControl label="Angle" value={settings.stripeAngle} min={-90} max={90} step={1} suffix="°" onChange={(v) => update("stripeAngle", v)} /></div></div><div className="control-section"><div className="section-title"><span><SlidersHorizontal size={15} /> STRIPE COLOURS</span><span>02</span></div><ColorControl label="Light band" value={settings.stripeA} onChange={(v) => update("stripeA", v)} /><ColorControl label="Dark band" value={settings.stripeB} onChange={(v) => update("stripeB", v)} /></div><div className="tip-box"><strong>READ THE SURFACE</strong><span>A sudden stripe jump points to a gap or sharp edge. A kink points to a G1 tangent break.</span></div></>}
-            {panel === "image" && <><div className="image-source-card">{sourceUrl ? <img src={sourceUrl} alt="Source image" /> : <div className="empty-source"><ImagePlus size={29} strokeWidth={1.2} /><span>NO SOURCE IMAGE</span></div>}<div><span>SOURCE IMAGE</span><strong>{sourceName || "Add your own image"}</strong><button onClick={() => uploadRef.current?.click()}>{source ? "Replace image" : "Choose image"} <span>↗</span></button></div></div><div className="control-section"><div className="section-title"><span><ImagePlus size={15} /> PROCESSING</span><span>01</span></div><div className="mapping-choice"><button className={settings.imageMapping === "reflection" ? "active" : ""} onClick={() => update("imageMapping", "reflection")}><strong>Reflect image</strong><span>Map source using the view reflection vector</span></button><button className={settings.imageMapping === "matcap" ? "active" : ""} onClick={() => update("imageMapping", "matcap")}><strong>Existing matcap</strong><span>Center crop and fill outer corners</span></button></div>{settings.imageMapping === "reflection" && <div className="range-stack image-range"><RangeControl label="Image influence" value={settings.imageInfluence} min={0} max={1} suffix="%" onChange={(v) => update("imageInfluence", v)} /></div>}</div><div className="tip-box"><strong>BEST RESULTS</strong><span>Use a clean, evenly lit image or a centered sphere. The editor crops to a square and exports a ready-to-load matcap.</span></div></>}
+            {panel === "image" && <><div className="image-source-card">{sourceUrl ? <img src={sourceUrl} alt="Source image" /> : <div className="empty-source"><ImagePlus size={29} strokeWidth={1.2} /><span>NO SOURCE IMAGE</span></div>}<div><span>SOURCE IMAGE</span><strong>{sourceName || "Add your own image"}</strong><button onClick={() => uploadRef.current?.click()}>{source ? "Replace image" : "Choose image"} <span>↗</span></button></div></div><div className="control-section"><div className="section-title"><span><ImagePlus size={15} /> PROCESSING</span><span>01</span></div><div className="mapping-choice"><button className={settings.imageMapping === "reflection" ? "active" : ""} onClick={() => update("imageMapping", "reflection")}><strong>Reflect image</strong><span>Map source using the view reflection vector</span></button><button className={settings.imageMapping === "matcap" ? "active" : ""} onClick={() => update("imageMapping", "matcap")}><strong>Existing matcap</strong><span>Center crop and fill outer corners</span></button></div>{exrData && <div className="range-stack image-range"><RangeControl label="EXR exposure" value={settings.exrExposure} min={-4} max={4} step={0.1} suffix=" EV" onChange={(v) => update("exrExposure", v)} description="Tone map HDR highlights before PNG export" /></div>}{settings.imageMapping === "reflection" && <div className="range-stack image-range"><RangeControl label="Image influence" value={settings.imageInfluence} min={0} max={1} suffix="%" onChange={(v) => update("imageInfluence", v)} /></div>}</div><div className="tip-box"><strong>BEST RESULTS</strong><span>{exrData ? "Use Existing matcap for a rendered sphere. Reflect image remaps a flat source using view reflections. Project saves retain the original HDR file." : "Use a clean, evenly lit image or a centered sphere. The editor crops to a square and exports a ready-to-load matcap."}</span></div></>}
           </div>
           <div className="inspector-output"><div className="output-title"><span>EXPORT SETTINGS</span><span>READY <Check size={12} /></span></div><div className="resolution-row"><span>Resolution</span><select value={size} onChange={(e) => setSize(Number(e.target.value))} aria-label="Export resolution"><option value={256}>256 × 256</option><option value={512}>512 × 512</option><option value={1024}>1024 × 1024</option></select></div><label className="dither-row"><span><span className={`check-box ${settings.dither ? "checked" : ""}`}>{settings.dither && <Check size={10} />}</span>Dither smooth gradients</span><input type="checkbox" checked={settings.dither} onChange={(e) => update("dither", e.target.checked)} /></label><button className="export-wide" onClick={exportPng}><ArrowDownToLine size={15} /> Export matcap <span>PNG ↗</span></button></div>
         </aside>
       </div>
       <footer className="statusbar"><div><span className="status-indicator" /> LOCAL SESSION <span className="footer-divider" /> {autoSaved ? "AUTO-SAVED IN BROWSER" : "BROWSER STORAGE FULL · SAVE PROJECT"}</div><div>VIEW SPACE SHADING <span className="footer-divider" /> BUILT FOR VIEWPOINT <span className="footer-divider" /> v0.1</div></footer>
-      {dragging && <div className="drop-overlay"><UploadCloud size={32} /><strong>Drop to import image</strong><span>PNG, JPEG, or WebP</span></div>}
+      {dragging && <div className="drop-overlay"><UploadCloud size={32} /><strong>Drop to import image</strong><span>EXR, PNG, JPEG, or WebP</span></div>}
       {notice && <div className="toast" role="status"><Check size={14} />{notice}</div>}
     </main>
   );

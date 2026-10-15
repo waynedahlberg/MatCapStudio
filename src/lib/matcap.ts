@@ -29,6 +29,7 @@ export type MatcapSettings = {
   stripeB: string;
   imageMapping: ImageMapping;
   imageInfluence: number;
+  exrExposure: number;
   dither: boolean;
 };
 
@@ -60,6 +61,7 @@ export const DEFAULT_SETTINGS: MatcapSettings = {
   stripeB: "#222931",
   imageMapping: "reflection",
   imageInfluence: 0.85,
+  exrExposure: 0,
   dither: true,
 };
 

@@ -22,7 +22,9 @@ Matcap Studio creates textures for Viewpoint's `three.js` `MeshMatcapMaterial` l
 | License | Use your own image or a source with clear reuse rights, such as CC0. |
 | Name | Kebab-case PNG filename and a short display label. |
 
-The generator writes fully opaque pixels and fills the area outside the lookup circle with a rim color. Procedural studio materials include low-amplitude ordered dithering. Material and specular colors, key and fill light positions and colors, and rim strength and sharpness are adjustable. The preview uses the supplied Suzanne GLB plus alternate sample shapes. Image import crops the source to a centered square at 512 px. **Reflect image** maps the source with the reflected view vector; **Existing matcap** samples the cropped image as a matcap and fills corners using the average edge color.
+The generator writes fully opaque pixels and fills the area outside the lookup circle with a rim color. Procedural studio materials include low-amplitude ordered dithering. Material and specular colors, key and fill light positions and colors, and rim strength and sharpness are adjustable. The preview uses the supplied Suzanne GLB plus alternate sample shapes. Image import crops the source to a centered square at 512 px. **Reflect image** maps a flat source with the reflected view vector; **Existing matcap** samples the cropped image as a matcap and fills corners using the average edge color.
+
+EXR imports are decoded locally as scene-linear floats, center-cropped, and converted to 8-bit sRGB with an adjustable exposure and Reinhard tone mapping. The conversion assumes linear-sRGB primaries; EXRs authored in another gamut, such as ACEScg, need gamut conversion first. Rendered sphere EXRs default to **Existing matcap**. A latitude-longitude environment EXR is not interpreted as an environment map. Project files embed the original EXR so exposure remains editable after reopening; browser auto-save retains only the converted preview.
 
 ## Zebra analysis
 
