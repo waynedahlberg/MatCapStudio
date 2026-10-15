@@ -1,5 +1,5 @@
 export type MatcapMode = "studio" | "zebra" | "normals" | "image";
-export type ImageMapping = "reflection" | "matcap";
+export type ImageMapping = "reflection" | "matcap" | "environment";
 
 export type MatcapSettings = {
   name: string;
@@ -30,6 +30,9 @@ export type MatcapSettings = {
   imageMapping: ImageMapping;
   imageInfluence: number;
   exrExposure: number;
+  environmentRotation: number;
+  reflectionBlur: number;
+  frost: number;
   dither: boolean;
 };
 
@@ -62,6 +65,9 @@ export const DEFAULT_SETTINGS: MatcapSettings = {
   imageMapping: "reflection",
   imageInfluence: 0.85,
   exrExposure: 0,
+  environmentRotation: 0,
+  reflectionBlur: 0,
+  frost: 0,
   dither: true,
 };
 
@@ -122,13 +128,9 @@ function averageImageRim(data: ImageData): RGB {
   return total;
 }
 
-/** Draws a square, opaque sRGB matcap. The lookup disk is radius 0.495, matching Viewpoint. */
-export function generateMatcap(settings: MatcapSettings, source?: ImageData | null, size = 512): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return canvas;
-  const output = ctx.createImageData(size, size);
+/** Render a square, opaque sRGB matcap. The lookup disk is radius 0.495, matching Viewpoint. */
+export function renderMatcapPixels(settings: MatcapSettings, source?: ImageData | null, size = 512): Uint8ClampedArray<ArrayBuffer> {
+  const output = new Uint8ClampedArray(size * size * 4);
   const base = rgb(settings.baseColor), rim = rgb(settings.rimColor), hi = rgb(settings.highlightColor);
   const key = rgb(settings.keyColor), fill = rgb(settings.fillColor);
   const stripeA = rgb(settings.stripeA), stripeB = rgb(settings.stripeB);
@@ -163,8 +165,8 @@ export function generateMatcap(settings: MatcapSettings, source?: ImageData | nu
           const form = 0.92 + 0.08 * nz;
           color = [0, 1, 2].map((c) => mix(stripeB[c], stripeA[c], t) * form) as RGB;
         } else if (settings.mode === "image" && source) {
-          if (settings.imageMapping === "matcap") {
-            color = sampleImage(source, (nx + 1) / 2, (1 - ny) / 2);
+          if (settings.imageMapping !== "reflection") {
+            color = sampleImage(source, 0.5 + nx * 0.495, 0.5 - ny * 0.495);
           } else {
             const rx = 2 * nz * nx, ry = 2 * nz * ny;
             const sampled = sampleImage(source, (rx + 1) / 2, (1 - ry) / 2);
@@ -189,13 +191,19 @@ export function generateMatcap(settings: MatcapSettings, source?: ImageData | nu
       }
       // Ordered dithering reduces visible steps in 8-bit studio gradients.
       const dither = settings.dither && settings.mode === "studio" ? (((x & 3) * 5 + (y & 3) * 3) % 16 - 7.5) / 16 : 0;
-      output.data[offset] = clamp(Math.round(color[0] + dither), 0, 255);
-      output.data[offset + 1] = clamp(Math.round(color[1] + dither), 0, 255);
-      output.data[offset + 2] = clamp(Math.round(color[2] + dither), 0, 255);
-      output.data[offset + 3] = 255;
+      output[offset] = clamp(Math.round(color[0] + dither), 0, 255);
+      output[offset + 1] = clamp(Math.round(color[1] + dither), 0, 255);
+      output[offset + 2] = clamp(Math.round(color[2] + dither), 0, 255);
+      output[offset + 3] = 255;
     }
   }
-  ctx.putImageData(output, 0, 0);
+  return output;
+}
+
+export function generateMatcap(settings: MatcapSettings, source?: ImageData | null, size = 512): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  canvas.getContext("2d")?.putImageData(new ImageData(renderMatcapPixels(settings, source, size), size, size), 0, 0);
   return canvas;
 }
 

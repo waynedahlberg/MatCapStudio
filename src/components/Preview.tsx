@@ -42,9 +42,10 @@ function SampleMesh({ canvas, shape, wireframe }: { canvas: HTMLCanvasElement; s
     next.magFilter = THREE.LinearFilter;
     next.needsUpdate = true;
     return next;
-  }, [canvas]);
+  }, []);
   const material = useMemo(() => new THREE.MeshMatcapMaterial({ matcap: texture, color: "white" }), [texture]);
   useEffect(() => () => { material.dispose(); texture.dispose(); }, [material, texture]);
+  useEffect(() => { texture.image = canvas; texture.needsUpdate = true; }, [canvas, texture]);
   const geometry = useMemo(() => shape === "Torus" ? new THREE.TorusGeometry(1.06, 0.38, 56, 200) : new THREE.TorusKnotGeometry(1.0, 0.32, 320, 48, 2, 3), [shape]);
   useEffect(() => () => geometry.dispose(), [geometry]);
 

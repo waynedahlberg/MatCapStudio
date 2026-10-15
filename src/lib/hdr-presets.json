@@ -1,0 +1,19 @@
+[
+  { "id": "natural-studio", "label": "Natural Studio", "file": "MR_INT-001_NaturalStudio_NAD.hdr" },
+  { "id": "bathroom-hard", "label": "Bathroom Hard", "file": "MR_INT-002_BathroomHard_Pierre.hdr" },
+  { "id": "kitchen", "label": "Kitchen", "file": "MR_INT-003_Kitchen_Pierre.hdr" },
+  { "id": "big-window-tree", "label": "Big Window Tree", "file": "MR_INT-004_BigWindowTree_Thea.hdr" },
+  { "id": "white-neons", "label": "White Neons", "file": "MR_INT-005_WhiteNeons_NAD.hdr" },
+  { "id": "industrial-loft", "label": "Industrial Loft", "file": "MR_INT-006_LoftIndustrialWindow_Griffintown.hdr" },
+  { "id": "environment-010", "label": "Environment 010", "file": "010.exr" },
+  { "id": "environment-011", "label": "Environment 011", "file": "011.exr" },
+  { "id": "environment-012", "label": "Environment 012", "file": "012.exr" },
+  { "id": "environment-013", "label": "Environment 013", "file": "013.exr" },
+  { "id": "environment-014", "label": "Environment 014", "file": "014.exr" },
+  { "id": "environment-015", "label": "Environment 015", "file": "015.hdr" },
+  { "id": "environment-016", "label": "Environment 016", "file": "016.exr" },
+  { "id": "environment-017", "label": "Environment 017", "file": "017.hdr" },
+  { "id": "environment-018", "label": "Environment 018", "file": "018.hdr" },
+  { "id": "environment-019", "label": "Environment 019", "file": "019.hdr" },
+  { "id": "environment-020", "label": "Environment 020", "file": "020.exr" }
+]
